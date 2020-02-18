@@ -225,6 +225,7 @@ HEADERS += src/qt/bitcoingui.h \
     src/utiltime.h \
     src/random.h \
     src/reverselock.h \
+    src/txdb-leveldb.h \
     src/hash.h \
     src/uint256.h \
     src/kernel.h \
