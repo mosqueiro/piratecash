@@ -1,6 +1,6 @@
 TEMPLATE = app
 TARGET = piratecash-qt
-VERSION = 0.11.5.7
+VERSION = 0.11.5.8
 INCLUDEPATH += src src/json src/qt src/qt/plugins/mrichtexteditor
 QT += network printsupport
 DEFINES += ENABLE_WALLET
@@ -46,6 +46,8 @@ win32:QRENCODE_LIB_PATH=C:/dev/coindeps32/qrencode-3.4.4/.libs
 win32:SECP256K1_LIB_PATH =C:/dev/coindeps32/secp256k1/.libs
 win32:SECP256K1_INCLUDE_PATH =C:/dev/coindeps32/secp256k1/include
 macx:QMAKE_MAC_SDK = macosx10.15
+macx:LIBS += /opt/local/lib/libevent.a /opt/local/lib/libevent_pthreads.a
+linux:LIBS += -levent -levent_pthreads
 
 OBJECTS_DIR = build
 MOC_DIR = build
@@ -520,7 +522,7 @@ OTHER_FILES += \
 
 # platform specific defaults, if not overridden on command line
 isEmpty(BOOST_LIB_SUFFIX) {
-    macx:BOOST_LIB_SUFFIX =
+    macx:BOOST_LIB_SUFFIX = -mt
     windows:BOOST_LIB_SUFFIX=-mgw49-mt-s-1_57
 }
 
@@ -545,12 +547,12 @@ isEmpty(BDB_INCLUDE_PATH) {
 }
 
 isEmpty(BOOST_LIB_PATH) {
-    macx:BOOST_LIB_PATH = /opt/local/boost-1.66/lib
+    macx:BOOST_LIB_PATH = /opt/local/libexec/boost169/lib
     windows:BOOST_LIB_PATH=C:/dev/coindeps32/boost_1_57_0/stage/lib
 }
 
 isEmpty(BOOST_INCLUDE_PATH) {
-    macx:BOOST_INCLUDE_PATH = /opt/local/boost-1.66/include
+    macx:BOOST_INCLUDE_PATH = /opt/local/libexec/boost169/include
     windows:BOOST_INCLUDE_PATH=C:/dev/coindeps32/boost_1_57_0
 }
 

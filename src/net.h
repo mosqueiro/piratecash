@@ -57,6 +57,12 @@ static const int TIMEOUT_INTERVAL = 20 * 60;
 static const unsigned int MAX_SUBVERSION_LENGTH = 256;
 /** The maximum number of entries in an 'inv' protocol message */
 static const unsigned int MAX_INV_SZ = 50000;
+/** -upnp default */
+#ifdef USE_UPNP
+static const bool DEFAULT_UPNP = USE_UPNP;
+#else
+static const bool DEFAULT_UPNP = false;
+#endif
 /** The maximum number of entries in mapAskFor */
 static const size_t MAPASKFOR_MAX_SZ = MAX_INV_SZ;
 /** The maximum number of entries in setAskFor (larger due to getdata latency)*/
@@ -123,6 +129,7 @@ bool IsLimited(enum Network net);
 bool IsLimited(const CNetAddr& addr);
 bool AddLocal(const CService& addr, int nScore = LOCAL_NONE);
 bool AddLocal(const CNetAddr& addr, int nScore = LOCAL_NONE);
+bool RemoveLocal(const CService& addr);
 bool SeenLocal(const CService& addr);
 bool IsLocal(const CService& addr);
 bool GetLocal(CService &addr, const CNetAddr *paddrPeer = NULL);
@@ -151,7 +158,20 @@ extern bool fListen;
 extern uint64_t nLocalServices;
 extern uint64_t nLocalHostNonce;
 extern CAddrMan addrman;
+
+// The allocation of connections against the maximum allowed (nMaxConnections)
+// is prioritized as follows:
+// 1st: Outbound connections (MAX_OUTBOUND_CONNECTIONS)
+// 2nd: Inbound connections from whitelisted peers (nWhiteConnections)
+// 3rd: Inbound connections from non-whitelisted peers
+// Thus, the number of connection slots for the general public to use is:
+// nMaxConnections - (MAX_OUTBOUND_CONNECTIONS + nWhiteConnections)
+// Any additional inbound connections beyond limits will be immediately closed
+
+/** Maximum number of connections to simultaneously allow (aka connection slots) */
 extern int nMaxConnections;
+/** Number of connection slots to reserve for inbound from whitelisted peers */
+extern int nWhiteConnections;
 
 extern std::vector<CNode*> vNodes;
 extern CCriticalSection cs_vNodes;
@@ -921,4 +941,4 @@ void RelayInv(CInv &inv, const int minProtoVersion = MIN_PEER_PROTO_VERSION);
 
 void DumpBanlist();
 
-#endif
+#endif // BITCOIN_NET_H

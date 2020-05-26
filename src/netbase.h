@@ -29,7 +29,6 @@ enum Network
     NET_IPV4,
     NET_IPV6,
     NET_TOR,
-    NET_I2P,
 
     NET_MAX,
 };
@@ -39,6 +38,7 @@ class CNetAddr
 {
     protected:
         unsigned char ip[16]; // in network byte order
+        uint32_t scopeId; // for scoped/link-local ipv6 addresses
 
     public:
         CNetAddr();
@@ -54,9 +54,9 @@ class CNetAddr
          */
         void SetRaw(Network network, const uint8_t *data);
 
-        bool SetSpecial(const std::string &strName); // for Tor and I2P addresses
+        bool SetSpecial(const std::string &strName); // for Tor addresses
         bool IsIPv4() const;    // IPv4 mapped address (::FFFF:0:0/96, 0.0.0.0/0)
-        bool IsIPv6() const;    // IPv6 address (not mapped IPv4, not Tor/I2P)
+        bool IsIPv6() const;    // IPv6 address (not mapped IPv4, not Tor)
         bool IsRFC1918() const; // IPv4 private networks (10.0.0.0/8, 192.168.0.0/16, 172.16.0.0/12)
         bool IsRFC2544() const; // IPv4 inter-network communcations (192.18.0.0/15)
         bool IsRFC6598() const; // IPv4 ISP-level NAT (100.64.0.0/10)
@@ -71,7 +71,6 @@ class CNetAddr
         bool IsRFC6052() const; // IPv6 well-known prefix (64:FF9B::/96)
         bool IsRFC6145() const; // IPv6 IPv4-translated address (::FFFF:0:0:0/96)
         bool IsTor() const;
-        bool IsI2P() const;
         bool IsLocal() const;
         bool IsRoutable() const;
         bool IsValid() const;
@@ -85,7 +84,7 @@ class CNetAddr
         std::vector<unsigned char> GetGroup() const;
         int GetReachabilityFrom(const CNetAddr *paddrPartner = NULL) const;
 
-        CNetAddr(const struct in6_addr& pipv6Addr);
+        CNetAddr(const struct in6_addr& pipv6Addr, const uint32_t scope = 0);
         bool GetIn6Addr(struct in6_addr* pipv6Addr) const;
 
         friend bool operator==(const CNetAddr& a, const CNetAddr& b);
@@ -202,5 +201,9 @@ std::string NetworkErrorString(int err);
 bool CloseSocket(SOCKET& hSocket);
 /** Disable or enable blocking-mode for a socket */
 bool SetSocketNonBlocking(SOCKET& hSocket, bool fNonBlocking);
+/**
+ * Convert milliseconds to a struct timeval for e.g. select.
+ */
+struct timeval MillisToTimeval(int64_t nTimeout);
 
 #endif // BITCOIN_NETBASE_H

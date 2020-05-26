@@ -72,6 +72,7 @@ bool AppInit(int argc, char* argv[])
         }
 
         // Command-line RPC
+        bool fCommandLine = false;
         for (int i = 1; i < argc; i++)
             if (!IsSwitchChar(argv[i][0]) && !boost::algorithm::istarts_with(argv[i], "piratecash:"))
                 fCommandLine = true;
@@ -98,7 +99,6 @@ bool AppInit(int argc, char* argv[])
             }
             if (pid > 0) // Parent process, pid is child process id
             {
-                CreatePidFile(GetPidFile(), pid);
                 return true;
             }
             // Child process falls through to rest of initialization

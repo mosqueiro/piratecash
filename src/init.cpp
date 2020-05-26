@@ -17,6 +17,7 @@
 #include "pubkey.h"
 #include "util.h"
 #include "utilmoneystr.h"
+#include "torcontrol.h"
 #include "ui_interface.h"
 #include "checkpoints.h"
 #include "darksend-relay.h"
@@ -73,6 +74,15 @@ unsigned int nDerivationMethodIndex;
 unsigned int nMinerSleep;
 bool fUseFastIndex;
 bool fOnlyTor = false;
+
+#ifdef WIN32
+// Win32 LevelDB doesn't use filedescriptors, and the ones used for
+// accessing block files don't count towards the fd_set size limit
+// anyway.
+#define MIN_CORE_FILEDESCRIPTORS 0
+#else
+#define MIN_CORE_FILEDESCRIPTORS 150
+#endif
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -160,6 +170,11 @@ void PrepareShutdown(){
 
 static boost::scoped_ptr<ECCVerifyHandle> globalVerifyHandle;
 
+void Interrupt(boost::thread_group& threadGroup)
+{
+    threadGroup.interrupt_all();
+}
+
 /**
 * Shutdown is split into 2 parts:
 * Part 1: shut down everything but the main wallet instance (done in PrepareShutdown() )
@@ -176,7 +191,9 @@ void Shutdown()
     if(!fRestartRequested || true){ // most of shutdown is already done when we're restarting the wallet
         PrepareShutdown();
     }
+#ifndef WIN32
     boost::filesystem::remove(GetPidFile());
+#endif
     UnregisterAllWallets();
 #ifdef ENABLE_WALLET
     delete pwalletMain;
@@ -224,6 +241,26 @@ bool static Bind(const CService &addr, unsigned int flags) {
     return true;
 }
 
+void OnRPCStopped()
+ {
+     cvBlockChange.notify_all();
+     LogPrint("rpc", "RPC stopped.\n");
+ }
+
+ void OnRPCPreCommand(const CRPCCommand& cmd)
+ {
+ #ifdef ENABLE_WALLET
+     if (cmd.reqWallet && !pwalletMain)
+         throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found (disabled)");
+ #endif
+
+     // Observe safe mode
+     string strWarning = GetWarnings("rpc");
+     if (strWarning != "" && !GetBoolArg("-disablesafemode", false) &&
+         !cmd.okSafeMode)
+         throw JSONRPCError(RPC_FORBIDDEN_BY_SAFE_MODE, string("Safe mode: ") + strWarning);
+ }
+
 std::string HelpMessage()
 {
     string strUsage = _("Options:") + "\n";
@@ -236,11 +273,15 @@ std::string HelpMessage()
     strUsage += "  -dbwalletcache=<n>     " + _("Set wallet database cache size in megabytes (default: 1)") + "\n";
     strUsage += "  -dblogsize=<n>         " + _("Set database disk log size in megabytes (default: 100)") + "\n";
     strUsage += "  -timeout=<n>           " + strprintf(_("Specify connection timeout in milliseconds (minimum: 1, default: %d)"), DEFAULT_CONNECT_TIMEOUT) + "\n";
+    strUsage += "  -torpassword=<pass>    " + _("Tor control port password (default: empty)");
     strUsage += "  -proxy=<ip:port>       " + _("Connect through SOCKS5 proxy") + "\n";
-    strUsage += "  -tor=<ip:port>         " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n";
+    strUsage += "  -onion=<ip:port>       " + _("Use proxy to reach tor hidden services (default: same as -proxy)") + "\n";
     strUsage += "  -dns                   " + _("Allow DNS lookups for -addnode, -seednode and -connect") + "\n";
     strUsage += "  -port=<port>           " + _("Listen for connections on <port> (default: 23232)") + "\n";
     strUsage += "  -maxconnections=<n>    " + _("Maintain at most <n> connections to peers (default: 125)") + "\n";
+#ifndef WIN32
+    strUsage += "  -pid=<file>            " + _("Specify pid file (default: piratecashd.pid)") + "\n";
+#endif
     strUsage += "  -addnode=<ip>          " + _("Add a node to connect to and attempt to keep the connection open") + "\n";
     strUsage += "  -connect=<ip>          " + _("Connect only to the specified node(s)") + "\n";
     strUsage += "  -seednode=<ip>         " + _("Connect to a node to retrieve peer addresses, and disconnect") + "\n";
@@ -249,6 +290,7 @@ std::string HelpMessage()
     strUsage += "  -discover              " + _("Discover own IP address (default: 1 when listening and no -externalip)") + "\n";
     strUsage += "  -irc                   " + _("Find peers using internet relay chat (default: 0)") + "\n";
     strUsage += "  -listen                " + _("Accept connections from outside (default: 1 if no -proxy or -connect)") + "\n";
+    strUsage += "  -listenonion           " + strprintf(_("Automatically create Tor hidden service (default: %d)"), DEFAULT_LISTEN_ONION);
     strUsage += "  -bind=<addr>           " + _("Bind to given address and always listen on it. Use [host]:port notation for IPv6") + "\n";
     strUsage += "  -dnsseed               " + _("Query for peer addresses via DNS lookup, if low on addresses (default: 1 unless -connect)") + "\n";
     strUsage += "  -forcednsseed          " + _("Always query for peer addresses via DNS lookup (default: 0)") + "\n";
@@ -266,6 +308,7 @@ std::string HelpMessage()
 #endif
     strUsage += "  -whitebind=<addr>      " + _("Bind to given address and whitelist peers connecting to it. Use [host]:port notation for IPv6") + "\n";
     strUsage += "  -whitelist=<netmask>   " + _("Whitelist peers connecting from the given netmask or ip. Can be specified multiple times.") + "\n";
+    strUsage += "  -whiteconnections=<n>", strprintf(_("Reserve this many inbound connections for whitelisted peers (default: %d)"), 0);
     strUsage += "  -paytxfee=<amt>        " + _("Fee per KB to add to transactions you send") + "\n";
     strUsage += "  -mininput=<amt>        " + _("When creating transactions, ignore inputs with value less than this (default: 0.01)") + "\n";
     if (fHaveGUI)
@@ -279,7 +322,7 @@ std::string HelpMessage()
     strUsage +=                               _("If <category> is not supplied, output all debugging information.") + "\n";
     strUsage +=                               _("<category> can be:");
     strUsage +=                                 " addrman, alert, db, lock, rand, rpc, selectcoins, mempool, net,"; // Don't translate these and qt below
-    strUsage +=                                 " coinage, coinstake, creation, stakemodifier";
+    strUsage +=                                 " coinage, coinstake, creation, stakemodifier, tor";
     if (fHaveGUI){
         strUsage += ", qt.\n";
     }else{
@@ -472,6 +515,9 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     sigemptyset(&sa_hup.sa_mask);
     sa_hup.sa_flags = 0;
     sigaction(SIGHUP, &sa_hup, NULL);
+
+    // Ignore SIGPIPE, otherwise it will bring the daemon down if the client closes unexpectedly
+    signal(SIGPIPE, SIG_IGN);
 #endif
 
     // ********************************************************* Step 2: parameter interactions
@@ -521,6 +567,8 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         // to protect privacy, do not discover addresses by default
         if (SoftSetBoolArg("-discover", false))
             LogPrintf("AppInit2 : parameter interaction: -proxy set -> setting -discover=0\n");
+        if (SoftSetBoolArg("-listenonion", false))
+            LogPrintf("%s: parameter interaction: -listen=0 -> setting -listenonion=0\n", __func__);
     }
 
     if (!GetBoolArg("-listen", true)) {
@@ -542,6 +590,47 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         if (SoftSetBoolArg("-rescan", true))
             LogPrintf("AppInit2 : parameter interaction: -salvagewallet=1 -> setting -rescan=1\n");
     }
+
+    // Make sure enough file descriptors are available
+    int nBind = std::max((int)mapArgs.count("-bind") + (int)mapArgs.count("-whitebind"), 1);
+    int nUserMaxConnections = GetArg("-maxconnections", 125);
+    nMaxConnections = std::max(nUserMaxConnections, 0);
+    int nUserWhiteConnections = GetArg("-whiteconnections", 0);
+    nWhiteConnections = std::max(nUserWhiteConnections, 0);
+
+    if ((mapArgs.count("-whitelist")) || (mapArgs.count("-whitebind"))) {
+        if (!(mapArgs.count("-maxconnections"))) {
+            // User is using whitelist feature,
+            // but did not specify -maxconnections parameter.
+            // Silently increase the default to compensate,
+            // so that the whitelist connection reservation feature
+            // does not inadvertently reduce the default
+            // inbound connection capacity of the network.
+            nMaxConnections += nWhiteConnections;
+        }
+    } else {
+        // User not using whitelist feature.
+        // Silently disable connection reservation,
+        // for the same reason as above.
+        nWhiteConnections = 0;
+    }
+
+    // Trim requested connection counts, to fit into system limitations
+    nMaxConnections = std::max(std::min(nMaxConnections, (int)(FD_SETSIZE - nBind - MIN_CORE_FILEDESCRIPTORS)), 0);
+    int nFD = RaiseFileDescriptorLimit(nMaxConnections + MIN_CORE_FILEDESCRIPTORS);
+    if (nFD < MIN_CORE_FILEDESCRIPTORS)
+        return InitError(_("Not enough file descriptors available."));
+    nMaxConnections = std::min(nFD - MIN_CORE_FILEDESCRIPTORS, nMaxConnections);
+
+    if (nMaxConnections < nUserMaxConnections)
+        InitWarning(strprintf(_("Reducing -maxconnections from %d to %d, because of system limitations."), nUserMaxConnections, nMaxConnections));
+
+    // Connection capacity is prioritized in this order:
+    // outbound connections (hardcoded to 8),
+    // then whitelisted connections,
+    // then non-whitelisted connections get whatever's left (if any).
+    if ((nWhiteConnections > 0) && (nWhiteConnections >= (nMaxConnections - 8)))
+        InitWarning(strprintf(_("All non-whitelisted incoming connections will be dropped, because -whiteconnections is %d and -maxconnections is only %d."), nWhiteConnections, nMaxConnections));
 
     // ********************************************************* Step 3: parameter-to-internal-flags
 
@@ -567,6 +656,9 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     // Check for -debugnet (deprecated)
     if (GetBoolArg("-debugnet", false))
         InitWarning(_("Warning: Deprecated argument -debugnet ignored, use -debug=net"));
+    // Check for -tor - as this is a privacy risk to continue, exit here
+    if (GetBoolArg("-tor", false))
+        return InitError(_("Error: Unsupported argument -tor found, use -onion."));
     // Check for -socks - as this is a privacy risk to continue, exit here
     if (mapArgs.count("-socks"))
         return InitError(_("Error: Unsupported argument -socks found. Setting SOCKS version isn't possible anymore, only SOCKS5 proxies are supported."));
@@ -632,7 +724,9 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     static boost::interprocess::file_lock lock(pathLockFile.string().c_str());
     if (!lock.try_lock())
         return InitError(strprintf(_("Cannot obtain a lock on data directory %s. Piratecash is probably already running."), strDataDir));
-
+#ifndef WIN32
+    CreatePidFile(GetPidFile(), getpid());
+#endif
     if (GetBoolArg("-shrinkdebugfile", !fDebug))
         ShrinkDebugFile();
     LogPrintf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
@@ -642,6 +736,8 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         LogPrintf("Startup time: %s\n", DateTimeStrFormat("%x %H:%M:%S", GetTime()));
     LogPrintf("Default data directory %s\n", GetDefaultDataDir().string());
     LogPrintf("Used data directory %s\n", strDataDir);
+    if (nWhiteConnections > 0)
+        LogPrintf("Reserving %i of these connections for whitelisted inbound peers\n", nWhiteConnections);
     std::ostringstream strErrors;
 
     // Start the lightweight task scheduler thread
@@ -841,15 +937,16 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         fProxy = true;
     }
 
-    // -tor can override normal proxy, -notor disables tor entirely
-    if (!(mapArgs.count("-tor") && mapArgs["-tor"] == "0") && (fProxy || mapArgs.count("-tor"))) {
+    // -onion can override normal proxy, -noonion disables tor entirely
+    if (!(mapArgs.count("-onion") && mapArgs["-onion"] == "0") &&
+            (fProxy || mapArgs.count("-onion"))) {
         CService addrOnion;
-        if (!mapArgs.count("-tor"))
+        if (!mapArgs.count("-onion"))
             addrOnion = addrProxy;
         else
-            addrOnion = CService(mapArgs["-tor"], 9050);
+            addrOnion = CService(mapArgs["-onion"], 9050);
         if (!addrOnion.IsValid())
-            return InitError(strprintf(_("Invalid -tor address: '%s'"), mapArgs["-tor"]));
+            return InitError(strprintf(_("Invalid -onion address: '%s'"), mapArgs["-onion"]));
         SetProxy(NET_TOR, addrOnion);
         SetReachable(NET_TOR);
     }
@@ -1238,12 +1335,15 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     LogPrintf("mapAddressBook.size() = %u\n",  pwalletMain ? pwalletMain->mapAddressBook.size() : 0);
 #endif
 
+
     StartNode(threadGroup);
 #ifdef ENABLE_WALLET
     // InitRPCMining is needed here so getwork/getblocktemplate in the GUI debug console works properly.
     InitRPCMining();
 #endif
     if (fServer)
+        RPCServer::OnStopped(&OnRPCStopped);
+        RPCServer::OnPreCommand(&OnRPCPreCommand);
         StartRPCThreads();
 
 #ifdef ENABLE_WALLET

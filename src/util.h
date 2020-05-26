@@ -120,7 +120,6 @@ extern bool fPrintToConsole;
 extern bool fPrintToDebugLog;
 extern bool fDaemon;
 extern bool fServer;
-extern bool fCommandLine;
 extern std::string strMiscWarning;
 extern bool fLogTimestamps;
 extern bool fLogIPs;
@@ -168,19 +167,20 @@ void RandAddSeed();
 void RandAddSeedPerfmon();
 
 void PrintException(std::exception* pex, const char* pszThread);
-void PrintExceptionContinue(std::exception* pex, const char* pszThread);
+void PrintExceptionContinue(const std::exception *pex, const char* pszThread);
 void ParseString(const std::string& str, char c, std::vector<std::string>& v);
 void ParseParameters(int argc, const char*const argv[]);
 bool WildcardMatch(const char* psz, const char* mask);
 bool WildcardMatch(const std::string& str, const std::string& mask);
 void FileCommit(FILE *fileout);
+int RaiseFileDescriptorLimit(int nMinFD);
 bool RenameOver(boost::filesystem::path src, boost::filesystem::path dest);
 boost::filesystem::path GetDefaultDataDir();
 const boost::filesystem::path &GetDataDir(bool fNetSpecific = true);
 boost::filesystem::path GetConfigFile();
 boost::filesystem::path GetMasternodeConfigFile();
-boost::filesystem::path GetPidFile();
 #ifndef WIN32
+boost::filesystem::path GetPidFile();
 void CreatePidFile(const boost::filesystem::path &path, pid_t pid);
 #endif
 void ReadConfigFile(std::map<std::string, std::string>& mapSettingsRet, std::map<std::string, std::vector<std::string> >& mapMultiSettingsRet);
@@ -190,7 +190,7 @@ boost::filesystem::path GetSpecialFolderPath(int nFolder, bool fCreate = true);
 
 std::string getTimeString(int64_t timestamp, char *buffer, size_t nBuffer);
 std::string bytesReadable(uint64_t nBytes);
-
+boost::filesystem::path GetTempPath();
 void ShrinkDebugFile();
 int64_t GetAdjustedTime();
 int64_t GetTimeOffset();
@@ -479,4 +479,4 @@ template <typename Callable> void TraceThread(const char* name,  Callable func)
     }
 }
 
-#endif
+#endif // BITCOIN_UTIL_H
